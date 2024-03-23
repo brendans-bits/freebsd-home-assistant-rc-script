@@ -1,0 +1,129 @@
+#!/bin/sh
+
+# PROVIDE: homeassistant
+# REQUIRE: DAEMON NETWORKING
+# KEYWORD: shutdown
+
+# Version 20240323
+#
+# homeassistant_enable: Enable the Home Assistant service
+#       Required: Yes
+#       Default: "NO"
+#
+# homeassistant_environment: Path to where you have installed Home Assistant Core
+#       Required: Yes
+#       Default: ""
+#       This needs to provide a path to the Python virtual environment
+#       where you have installed Home Assistant Core
+#
+# homeassistant_user: The user that will run Home Assistant Core
+#       Required: No
+#       Default: "homeassistant"
+#
+# homeassistant_group: The group that will run Home Assistant Core
+#       Required: No
+#       Default: "homeassistant"
+#
+# homeassistant_log_folder: Where Home Assistant Core will store logs
+#       Required: Yes
+#       Default: "/var/log/homeassistant/"
+#
+# homeassistant_config_folder: Where Home Assistant Core stores config files and database
+#       Required: Yes
+#       Default: "/home/homeassistant/.homeassistant"
+#
+# homeassistant_run_options: Other flags to pass to Home Assistant Core
+#       Required: No
+#       Default: ""
+#       Any flags that can be passed to `hass` go here. Examples include:
+#        - `--verbose` to enable verbose logging
+#       Note: `--ignore-os-check`, --log-file`, and `--config` are already passed.
+
+. /etc/rc.subr
+
+name="homeassistant"
+rcvar=homeassistant_enable
+
+load_rc_config $name
+: ${homeassistant_enable:="NO"}
+: ${homeassistant_environment:=""}
+: ${homeassistant_user:="homeassistant"}
+: ${homeassistant_group:="homeassistant"}
+: ${homeassistant_log_folder="/var/log/homeassistant"}
+: ${homeassistant_config_folder="/home/homeassistant/.homeassistant"}
+: ${homeassistant_run_options=""}
+
+pid_directory=/var/run/homeassistant
+
+pidfile="${pid_directory}/${name}_child.pid"
+
+ppidfile="${pid_directory}/${name}_daemon.pid"
+
+homeassistant_command="${homeassistant_environment}/bin/python ${homeassistant_environment}/bin/hass"
+
+command="/usr/sbin/daemon"
+
+procname="${homeassistant_environment}/bin/python"
+
+procname_args="${homeassistant_environment}/bin/hass --ignore-os-check --config=${homeassistant_config_folder} --log-file=${homeassistant_log_folder}/homeassistant-daemon.log"
+
+command_args="-p ${pidfile} -P ${ppidfile} -f -r ${procname} ${procname_args} ${homeassistant_run_options} ${rc_flags}"
+
+start_precmd="${name}_prestart"
+
+homeassistant_prestart()
+{
+
+        # Check if PIF directory exists
+        if [ ! -d ${pid_directory} ]; then
+               install -d -o ${homeassistant_user} ${pid_directory}
+        fi
+
+        # Check that the log folder exists
+        if [ ! -e ${homeassistant_log_folder} ]; then
+               install -d -o ${homeassistant_user} -g ${homeassistant_group} -m 760 ${homeassistant_log_folder}
+        fi
+
+        # Check if the HA env variable has been set
+        if [  -z ${homeassistant_environment} ]; then
+               echo "Please set 'homeassistant_environment=' in /etc/rc.conf" && exit 1
+        fi
+
+        # Check if the provided HA environment actually exists
+        if [ ! -e ${homeassistant_environment}/bin/hass ]; then
+               echo "Home Assistant script not found - please install Home Assistant" && exit 1
+        fi
+}
+
+# Custom status command adapted from:
+# https://github.com/tprelog/iocage-homeassistant/blob/master/overlay/usr/local/etc/rc.d/homeassistant
+status_cmd=${name}_status
+homeassistant_status() {
+        local _http_ _ip_
+        if [ -n "${rc_pid}" ]; then
+                : "${homeassistant_secure:="NO"}" # This is only a cosmetic variable - used by the status_cmd
+                _ip_="$(ifconfig | sed -En 's/127.0.0.1//;s/.*inet (addr:)?(([0-9]*\.){3}[0-9]*).*/\2/p')"
+                checkyesno homeassistant_secure && _http_="https" || _http_="http"
+                echo "${name} is running as pid ${rc_pid}."
+                echo "${_http_}://${_ip_}:${homeassistant_port:-"8123"}"  # This is only a cosmetic variable
+                ${homeassistant_environment}/bin/python --version
+                ${homeassistant_environment}/bin/hass --version
+
+
+        else
+                echo "${name} is not running."
+                return 1
+        fi
+}
+
+stop_cmd="${name}_stop"
+homeassistant_stop()
+{
+        echo "Stopping PID: $(cat ${ppidfile})"
+        /bin/kill -9 $(cat ${ppidfile})
+        echo "Stopping PID: $(cat ${pidfile})"
+        /bin/kill -15 $(cat ${pidfile})
+}
+
+run_rc_command "$1"
+
